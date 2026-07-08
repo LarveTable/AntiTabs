@@ -7,6 +7,7 @@ const INVISIBLE_OPACITY = 0.05;
 const EXTREME_Z_INDEX = 2147480000;
 
 let antiTabsEnabled = false;
+let allowNextTab = false;
 let overlayObserver = null;
 let overlayScanTimer = null;
 
@@ -45,7 +46,8 @@ function sendStateToPage() {
     {
       source: MESSAGE_SOURCE,
       type: "STATE",
-      enabled: antiTabsEnabled
+      enabled: antiTabsEnabled,
+      allowNextTab
     },
     "*"
   );
@@ -70,6 +72,7 @@ async function refreshEnabledState() {
 
   if (!origin) {
     antiTabsEnabled = false;
+    allowNextTab = false;
     sendStateToPage();
     updateOverlayShield();
     return;
@@ -77,6 +80,17 @@ async function refreshEnabledState() {
 
   const result = await chrome.storage.local.get(STORAGE_KEY);
   antiTabsEnabled = Boolean((result[STORAGE_KEY] || {})[origin]);
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "ANTITABS_GET_ALLOW_NEXT",
+      origin
+    });
+    allowNextTab = Boolean(response && response.allowNextTab);
+  } catch {
+    allowNextTab = false;
+  }
+
   sendStateToPage();
   updateOverlayShield();
 }
@@ -106,6 +120,12 @@ function keepLinkInCurrentTab(event) {
   const anchor = findAnchor(event);
 
   if (!anchor || !anchor.href || !shouldStayInCurrentTab(anchor, event)) {
+    return;
+  }
+
+  if (allowNextTab) {
+    allowNextTab = false;
+    sendStateToPage();
     return;
   }
 
@@ -355,6 +375,11 @@ function updateOverlayShield() {
   scanForSuspiciousOverlays();
 }
 
+function setAllowNextState(isEnabled) {
+  allowNextTab = Boolean(isEnabled);
+  sendStateToPage();
+}
+
 refreshEnabledState();
 
 document.addEventListener("click", keepLinkInCurrentTab, true);
@@ -370,6 +395,11 @@ window.addEventListener("message", (event) => {
     return;
   }
 
+  if (event.data.eventType === "allowNextTabUsed") {
+    setAllowNextState(false);
+    return;
+  }
+
   recordProtectionEvent(event.data.eventType);
 });
 
@@ -380,11 +410,18 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (!message || message.type !== "ANTITABS_STATE") {
+  if (!message || !message.type) {
     return;
   }
 
-  antiTabsEnabled = Boolean(message.enabled);
-  sendStateToPage();
-  updateOverlayShield();
+  if (message.type === "ANTITABS_STATE") {
+    antiTabsEnabled = Boolean(message.enabled);
+    sendStateToPage();
+    updateOverlayShield();
+    return;
+  }
+
+  if (message.type === "ANTITABS_ALLOW_NEXT_STATE") {
+    setAllowNextState(message.allowNextTab);
+  }
 });

@@ -2,6 +2,10 @@ const toggle = document.querySelector("#toggle");
 const siteLabel = document.querySelector("#site");
 const stateLabel = document.querySelector("#stateLabel");
 const message = document.querySelector("#message");
+const allowNextPanel = document.querySelector("#allowNextPanel");
+const allowNextTitle = document.querySelector("#allowNextTitle");
+const allowNextDescription = document.querySelector("#allowNextDescription");
+const allowNextButton = document.querySelector("#allowNextButton");
 const tabsClosedCount = document.querySelector("#tabsClosedCount");
 const popupsBlockedCount = document.querySelector("#popupsBlockedCount");
 const overlaysShieldedCount = document.querySelector("#overlaysShieldedCount");
@@ -11,9 +15,12 @@ const emptyStats = document.querySelector("#emptyStats");
 
 const STORAGE_KEY = "enabledOrigins";
 const STATS_KEY = "sessionStats";
+const ALLOW_NEXT_KEY = "allowNextTabOrigins";
 
 let currentOrigin = null;
 let currentTabId = null;
+let currentProtectionEnabled = false;
+let currentAllowNextEnabled = false;
 
 function getOrigin(url) {
   try {
@@ -34,8 +41,21 @@ function setMessage(text) {
 }
 
 function updateState(isEnabled) {
+  currentProtectionEnabled = isEnabled;
   toggle.checked = isEnabled;
   stateLabel.textContent = isEnabled ? "Protection on" : "Protection off";
+  updateAllowNextState(currentAllowNextEnabled);
+}
+
+function updateAllowNextState(isEnabled) {
+  currentAllowNextEnabled = isEnabled;
+  allowNextPanel.classList.toggle("is-active", isEnabled);
+  allowNextTitle.textContent = isEnabled ? "One tab is allowed" : "Allow next tab";
+  allowNextDescription.textContent = isEnabled
+    ? "The next tab can open, then blocking resumes."
+    : "Let one new tab open, then return to blocking.";
+  allowNextButton.textContent = isEnabled ? "Waiting..." : "Allow once";
+  allowNextButton.disabled = !currentOrigin || !currentProtectionEnabled || isEnabled;
 }
 
 function formatEventTime(timestamp) {
@@ -81,6 +101,22 @@ async function refreshStats() {
   }
 }
 
+async function readAllowNextState(origin) {
+  if (!origin) {
+    return false;
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "ANTITABS_GET_ALLOW_NEXT",
+      origin
+    });
+    return Boolean(response && response.allowNextTab);
+  } catch {
+    return false;
+  }
+}
+
 async function readEnabledOrigins() {
   const result = await chrome.storage.local.get(STORAGE_KEY);
   return result[STORAGE_KEY] || {};
@@ -113,6 +149,21 @@ async function notifyActiveTab(isEnabled) {
   }
 }
 
+async function notifyActiveTabAllowNext(isEnabled) {
+  if (!currentTabId) {
+    return;
+  }
+
+  try {
+    await chrome.tabs.sendMessage(currentTabId, {
+      type: "ANTITABS_ALLOW_NEXT_STATE",
+      allowNextTab: isEnabled
+    });
+  } catch {
+    // The content script may not be available on browser-owned pages.
+  }
+}
+
 async function initialize() {
   await refreshStats();
 
@@ -120,6 +171,7 @@ async function initialize() {
 
   if (!tab || !tab.url) {
     siteLabel.textContent = "No active website found.";
+    updateAllowNextState(false);
     setMessage("Open a website tab to use AntiTabs.");
     return;
   }
@@ -129,6 +181,7 @@ async function initialize() {
 
   if (!currentOrigin) {
     siteLabel.textContent = "This page is not a website.";
+    updateAllowNextState(false);
     setMessage("AntiTabs works on http and https pages.");
     return;
   }
@@ -136,6 +189,7 @@ async function initialize() {
   siteLabel.textContent = currentOrigin;
   const enabledOrigins = await readEnabledOrigins();
   updateState(Boolean(enabledOrigins[currentOrigin]));
+  updateAllowNextState(await readAllowNextState(currentOrigin));
   toggle.disabled = false;
 }
 
@@ -147,13 +201,45 @@ toggle.addEventListener("change", async () => {
   const isEnabled = toggle.checked;
   updateState(isEnabled);
   await setOriginEnabled(currentOrigin, isEnabled);
+
+  if (!isEnabled && currentAllowNextEnabled) {
+    await chrome.runtime.sendMessage({
+      type: "ANTITABS_SET_ALLOW_NEXT",
+      origin: currentOrigin,
+      allowNextTab: false
+    });
+  }
+
   await notifyActiveTab(isEnabled);
+  updateAllowNextState(isEnabled ? currentAllowNextEnabled : false);
   await refreshStats();
+});
+
+allowNextButton.addEventListener("click", async () => {
+  if (!currentOrigin || !currentProtectionEnabled) {
+    return;
+  }
+
+  updateAllowNextState(true);
+  const response = await chrome.runtime.sendMessage({
+    type: "ANTITABS_SET_ALLOW_NEXT",
+    origin: currentOrigin,
+    allowNextTab: true
+  });
+  const allowNextTab = Boolean(response && response.allowNextTab);
+
+  updateAllowNextState(allowNextTab);
+  await notifyActiveTabAllowNext(allowNextTab);
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "session" && changes[STATS_KEY]) {
     renderStats(changes[STATS_KEY].newValue);
+  }
+
+  if (areaName === "session" && changes[ALLOW_NEXT_KEY] && currentOrigin) {
+    const allowNextOrigins = changes[ALLOW_NEXT_KEY].newValue || {};
+    updateAllowNextState(Boolean(allowNextOrigins[currentOrigin]));
   }
 });
 

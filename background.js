@@ -1,8 +1,10 @@
 const STORAGE_KEY = "enabledOrigins";
 const STATS_KEY = "sessionStats";
+const ALLOW_NEXT_KEY = "allowNextTabOrigins";
 const MAX_RECENT_EVENTS = 8;
 const PENDING_TAB_TIMEOUT_MS = 10000;
 const BADGE_CLEAR_DELAY_MS = 3000;
+const ALLOW_BADGE_TEXT = "1";
 const pendingProtectedTabs = new Map();
 let statsWriteQueue = Promise.resolve();
 let badgeCount = 0;
@@ -10,6 +12,7 @@ let badgeClearTimer = null;
 
 const DEFAULT_STATS = {
   counts: {
+    allowedTabs: 0,
     tabsClosed: 0,
     popupsBlocked: 0,
     linksKept: 0,
@@ -21,6 +24,10 @@ const DEFAULT_STATS = {
 };
 
 const EVENT_DETAILS = {
+  allowedNextTab: {
+    countKeys: ["allowedTabs"],
+    label: "Tab allowed once"
+  },
   adTabClosed: {
     countKeys: ["tabsClosed"],
     label: "Popup tab closed"
@@ -87,6 +94,32 @@ function getTargetUrl(tab) {
   return tab.pendingUrl || tab.url || "";
 }
 
+async function hasActiveAllowance() {
+  const result = await getStorageSession().get(ALLOW_NEXT_KEY);
+  return Object.keys(result[ALLOW_NEXT_KEY] || {}).length > 0;
+}
+
+async function showAllowanceBadgeIfNeeded() {
+  if (!(await hasActiveAllowance())) {
+    return false;
+  }
+
+  stopBadgeTimers();
+  badgeCount = 0;
+  chrome.action.setBadgeText({ text: ALLOW_BADGE_TEXT });
+  chrome.action.setBadgeBackgroundColor({ color: "#f59e0b" });
+  chrome.action.setBadgeTextColor({ color: "#111827" });
+  return true;
+}
+
+async function refreshBadge() {
+  if (await showAllowanceBadgeIfNeeded()) {
+    return;
+  }
+
+  chrome.action.setBadgeText({ text: "" });
+}
+
 function stopBadgeTimers() {
   if (badgeClearTimer) {
     clearTimeout(badgeClearTimer);
@@ -94,7 +127,11 @@ function stopBadgeTimers() {
   }
 }
 
-function pulseBadge() {
+async function pulseBadge() {
+  if (await showAllowanceBadgeIfNeeded()) {
+    return;
+  }
+
   stopBadgeTimers();
   badgeCount += 1;
 
@@ -105,7 +142,7 @@ function pulseBadge() {
   badgeClearTimer = setTimeout(() => {
     badgeCount = 0;
     badgeClearTimer = null;
-    chrome.action.setBadgeText({ text: "" });
+    refreshBadge();
   }, BADGE_CLEAR_DELAY_MS);
 }
 
@@ -116,6 +153,47 @@ async function isOriginEnabled(origin) {
 
   const result = await chrome.storage.local.get(STORAGE_KEY);
   return Boolean((result[STORAGE_KEY] || {})[origin]);
+}
+
+async function readAllowNextOrigins() {
+  const result = await getStorageSession().get(ALLOW_NEXT_KEY);
+  return result[ALLOW_NEXT_KEY] || {};
+}
+
+async function isAllowNextEnabled(origin) {
+  if (!origin) {
+    return false;
+  }
+
+  const allowNextOrigins = await readAllowNextOrigins();
+  return Boolean(allowNextOrigins[origin]);
+}
+
+async function setAllowNextOrigin(origin, isEnabled) {
+  if (!origin) {
+    return false;
+  }
+
+  const allowNextOrigins = await readAllowNextOrigins();
+
+  if (isEnabled) {
+    allowNextOrigins[origin] = true;
+  } else {
+    delete allowNextOrigins[origin];
+  }
+
+  await getStorageSession().set({ [ALLOW_NEXT_KEY]: allowNextOrigins });
+  await refreshBadge();
+  return Boolean(allowNextOrigins[origin]);
+}
+
+async function consumeAllowNextOrigin(origin) {
+  if (!(await isAllowNextEnabled(origin))) {
+    return false;
+  }
+
+  await setAllowNextOrigin(origin, false);
+  return true;
 }
 
 function createEmptyStats() {
@@ -150,14 +228,16 @@ async function writeStats(stats) {
   await getStorageSession().set({ [STATS_KEY]: normalizeStats(stats) });
 }
 
-async function recordProtectionEvent(eventType, details = {}) {
+async function recordProtectionEvent(eventType, details = {}, options = {}) {
   const eventDetails = EVENT_DETAILS[eventType];
 
   if (!eventDetails) {
     return;
   }
 
-  pulseBadge();
+  if (options.pulse !== false) {
+    await pulseBadge();
+  }
 
   statsWriteQueue = statsWriteQueue.catch(() => {}).then(async () => {
     const stats = await readStats();
@@ -239,6 +319,15 @@ async function closeIfOpenedByProtectedTab(openerTabId, openedTabId, targetUrl) 
     return;
   }
 
+  if (await consumeAllowNextOrigin(openerOrigin)) {
+    await recordProtectionEvent("allowedNextTab", { origin: openerOrigin }, { pulse: false });
+    chrome.tabs.sendMessage(openerTabId, {
+      type: "ANTITABS_ALLOW_NEXT_STATE",
+      allowNextTab: false
+    }).catch(() => {});
+    return;
+  }
+
   if (targetKind === "unknown") {
     rememberPendingTab(openedTabId, openerOrigin);
     return;
@@ -269,11 +358,24 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (targetKind === "web") {
     const openerOrigin = pendingProtectedTabs.get(tabId).origin;
     forgetPendingTab(tabId);
-    closeTab(tabId).then((wasClosed) => {
-      if (wasClosed) {
-        recordProtectionEvent("adTabClosed", { origin: openerOrigin });
+
+    isAllowNextEnabled(openerOrigin).then((allowNextTab) => {
+      if (!allowNextTab) {
+        closeTab(tabId).then((wasClosed) => {
+          if (wasClosed) {
+            recordProtectionEvent("adTabClosed", { origin: openerOrigin });
+          }
+        });
+        return;
       }
+
+      consumeAllowNextOrigin(openerOrigin).then((wasConsumed) => {
+        if (wasConsumed) {
+          recordProtectionEvent("allowedNextTab", { origin: openerOrigin }, { pulse: false });
+        }
+      });
     });
+    return;
   }
 });
 
@@ -294,6 +396,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "ANTITABS_GET_STATS") {
     readStats().then((stats) => sendResponse({ stats }));
+    return true;
+  }
+
+  if (message.type === "ANTITABS_GET_ALLOW_NEXT") {
+    isAllowNextEnabled(message.origin).then((allowNextTab) => sendResponse({ allowNextTab }));
+    return true;
+  }
+
+  if (message.type === "ANTITABS_SET_ALLOW_NEXT") {
+    setAllowNextOrigin(message.origin, Boolean(message.allowNextTab))
+      .then((allowNextTab) => sendResponse({ allowNextTab }));
     return true;
   }
 
