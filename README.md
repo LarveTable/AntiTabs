@@ -1,11 +1,20 @@
 # AntiTabs
 
-AntiTabs is a simple Microsoft Edge extension that helps stop websites from opening unwanted new tabs when you click around a page.
+AntiTabs is a browser extension for stopping websites from opening unwanted tabs when you click around a page.
 
-The first version is intentionally small: it will provide a toggle switch so you can turn this protection on or off for the active browsing session.
+Some websites use hidden overlays, embedded frames, or scripted popups to turn normal clicks into ad tabs. AntiTabs gives you a simple switch to block that behavior on sites where it gets in the way.
 
-## Goal
+## What It Does
 
-- Reduce annoying ad popups and forced new-tab behavior.
-- Keep normal browsing simple and predictable.
-- Start with a minimal extension that can be expanded later.
+- Blocks scripted popup attempts.
+- Prevents links from forcing a new tab when protection is enabled.
+- Helps neutralize full-page iframe overlays used to capture clicks.
+- Lets you turn protection on or off per website.
+
+## Browser Support
+
+The extension is currently being built for Chromium-based browsers first. Support for other browsers, including Safari, is planned as the project evolves.
+
+## Development
+
+The `master` branch contains project documentation. Browser-specific extension work lives on dedicated branches, starting with `edge`.
