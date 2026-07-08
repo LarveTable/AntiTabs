@@ -3,14 +3,10 @@ const STATS_KEY = "sessionStats";
 const MAX_RECENT_EVENTS = 8;
 const PENDING_TAB_TIMEOUT_MS = 10000;
 const BADGE_CLEAR_DELAY_MS = 3000;
-const BADGE_FADE_STEP_MS = 120;
-const BADGE_FADE_COLORS = ["#4b86fe", "#78a6ff", "#a9c6ff", "#d6e3ff"];
 const pendingProtectedTabs = new Map();
 let statsWriteQueue = Promise.resolve();
 let badgeCount = 0;
 let badgeClearTimer = null;
-let badgeFadeTimer = null;
-let badgeFadeToken = 0;
 
 const DEFAULT_STATS = {
   counts: {
@@ -96,33 +92,6 @@ function stopBadgeTimers() {
     clearTimeout(badgeClearTimer);
     badgeClearTimer = null;
   }
-
-  if (badgeFadeTimer) {
-    clearTimeout(badgeFadeTimer);
-    badgeFadeTimer = null;
-  }
-
-  badgeFadeToken += 1;
-}
-
-function fadeBadge(step, token) {
-  if (token !== badgeFadeToken) {
-    return;
-  }
-
-  if (step >= BADGE_FADE_COLORS.length) {
-    badgeCount = 0;
-    badgeFadeTimer = null;
-    chrome.action.setBadgeText({ text: "" });
-    chrome.action.setBadgeBackgroundColor({ color: "#246bfe" });
-    return;
-  }
-
-  chrome.action.setBadgeBackgroundColor({ color: BADGE_FADE_COLORS[step] });
-
-  badgeFadeTimer = setTimeout(() => {
-    fadeBadge(step + 1, token);
-  }, BADGE_FADE_STEP_MS);
 }
 
 function pulseBadge() {
@@ -134,9 +103,9 @@ function pulseBadge() {
   chrome.action.setBadgeTextColor({ color: "#ffffff" });
 
   badgeClearTimer = setTimeout(() => {
+    badgeCount = 0;
     badgeClearTimer = null;
-    const token = badgeFadeToken;
-    fadeBadge(0, token);
+    chrome.action.setBadgeText({ text: "" });
   }, BADGE_CLEAR_DELAY_MS);
 }
 
