@@ -9,3 +9,12 @@ The first version is intentionally small: it will provide a toggle switch so you
 - Reduce annoying ad popups and forced new-tab behavior.
 - Keep normal browsing simple and predictable.
 - Start with a minimal extension that can be expanded later.
+
+## Load locally in Microsoft Edge
+
+1. Open `edge://extensions`.
+2. Turn on Developer mode.
+3. Choose **Load unpacked**.
+4. Select this project folder.
+
+Use the AntiTabs toolbar button to enable or disable protection for the current website.

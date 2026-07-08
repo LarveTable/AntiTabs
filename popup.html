@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AntiTabs</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup">
+      <header>
+        <p class="eyebrow">AntiTabs</p>
+        <h1>Block new tabs</h1>
+        <p id="site" class="site">Loading current website...</p>
+      </header>
+
+      <label class="switch-row" for="toggle">
+        <span>
+          <strong id="stateLabel">Protection off</strong>
+          <small>Stops popup tabs and opens new-tab links here instead.</small>
+        </span>
+        <input id="toggle" type="checkbox" role="switch" disabled>
+        <span class="switch" aria-hidden="true"></span>
+      </label>
+
+      <p id="message" class="message" hidden></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
