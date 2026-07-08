@@ -6,8 +6,18 @@ const PENDING_TAB_TIMEOUT_MS = 10000;
 const BADGE_CLEAR_DELAY_MS = 3000;
 const ALLOW_BADGE_TEXT = "1";
 const ICON_PATHS = {
-  active: "icons/active.png",
-  inactive: "icons/unactive.png"
+  active: {
+    16: "icons/active-16.png",
+    32: "icons/active-32.png",
+    48: "icons/active-48.png",
+    128: "icons/active-128.png"
+  },
+  inactive: {
+    16: "icons/unactive-16.png",
+    32: "icons/unactive-32.png",
+    48: "icons/unactive-48.png",
+    128: "icons/unactive-128.png"
+  }
 };
 const pendingProtectedTabs = new Map();
 let statsWriteQueue = Promise.resolve();
