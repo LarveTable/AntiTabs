@@ -18,3 +18,5 @@ The first version is intentionally small: it will provide a toggle switch so you
 4. Select this project folder.
 
 Use the AntiTabs toolbar button to enable or disable protection for the current website.
+
+When protection is on, AntiTabs also runs inside embedded frames and neutralizes suspicious full-page iframe overlays that are commonly used to catch clicks for ad popups.
