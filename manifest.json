@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AntiTabs",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Toggle protection against unwanted new tabs on the active website.",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["<all_urls>"],

@@ -2,8 +2,11 @@ const STORAGE_KEY = "enabledOrigins";
 const STATS_KEY = "sessionStats";
 const MAX_RECENT_EVENTS = 8;
 const PENDING_TAB_TIMEOUT_MS = 10000;
+const BADGE_CLEAR_DELAY_MS = 1800;
 const pendingProtectedTabs = new Map();
 let statsWriteQueue = Promise.resolve();
+let badgeCount = 0;
+let badgeClearTimer = null;
 
 const DEFAULT_STATS = {
   counts: {
@@ -84,6 +87,24 @@ function getTargetUrl(tab) {
   return tab.pendingUrl || tab.url || "";
 }
 
+function pulseBadge() {
+  badgeCount += 1;
+
+  chrome.action.setBadgeText({ text: `+${Math.min(badgeCount, 9)}` });
+  chrome.action.setBadgeBackgroundColor({ color: "#246bfe" });
+  chrome.action.setBadgeTextColor({ color: "#ffffff" });
+
+  if (badgeClearTimer) {
+    clearTimeout(badgeClearTimer);
+  }
+
+  badgeClearTimer = setTimeout(() => {
+    badgeCount = 0;
+    badgeClearTimer = null;
+    chrome.action.setBadgeText({ text: "" });
+  }, BADGE_CLEAR_DELAY_MS);
+}
+
 async function isOriginEnabled(origin) {
   if (!origin) {
     return false;
@@ -131,6 +152,8 @@ async function recordProtectionEvent(eventType, details = {}) {
   if (!eventDetails) {
     return;
   }
+
+  pulseBadge();
 
   statsWriteQueue = statsWriteQueue.catch(() => {}).then(async () => {
     const stats = await readStats();
