@@ -1,6 +1,8 @@
 const STORAGE_KEY = "enabledOrigins";
 const MESSAGE_SOURCE = "ANTITABS_EXTENSION";
 const SHIELDED_IFRAME_ATTRIBUTE = "data-antitabs-shielded";
+const MIN_OVERLAY_COVERAGE = 0.7;
+const INVISIBLE_OPACITY = 0.05;
 
 let antiTabsEnabled = false;
 let iframeObserver = null;
@@ -98,12 +100,52 @@ function keepLinkInCurrentTab(event) {
   }
 }
 
+function getViewportSize() {
+  const root = document.documentElement;
+
+  return {
+    width: Math.max(root ? root.clientWidth : 0, window.innerWidth || 0),
+    height: Math.max(root ? root.clientHeight : 0, window.innerHeight || 0)
+  };
+}
+
+function getViewportCoverage(rect, viewport) {
+  const visibleWidth = Math.max(0, Math.min(rect.right, viewport.width) - Math.max(rect.left, 0));
+  const visibleHeight = Math.max(0, Math.min(rect.bottom, viewport.height) - Math.max(rect.top, 0));
+
+  if (viewport.width <= 0 || viewport.height <= 0) {
+    return 0;
+  }
+
+  return (visibleWidth * visibleHeight) / (viewport.width * viewport.height);
+}
+
+function parseOpacity(value) {
+  const opacity = Number.parseFloat(value);
+  return Number.isFinite(opacity) ? opacity : 1;
+}
+
+function isEffectivelyInvisible(element) {
+  for (let current = element; current && current.nodeType === Node.ELEMENT_NODE; current = current.parentElement) {
+    const style = getComputedStyle(current);
+
+    if (style.display === "none" || style.visibility === "hidden") {
+      return true;
+    }
+
+    if (parseOpacity(style.opacity) <= INVISIBLE_OPACITY) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function isSuspiciousIframe(iframe) {
   const rect = iframe.getBoundingClientRect();
-  const viewportWidth = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
-  const viewportHeight = Math.max(document.documentElement.clientHeight, window.innerHeight || 0);
+  const viewport = getViewportSize();
 
-  if (rect.width < viewportWidth * 0.7 || rect.height < viewportHeight * 0.7) {
+  if (rect.width <= 0 || rect.height <= 0) {
     return false;
   }
 
@@ -113,16 +155,14 @@ function isSuspiciousIframe(iframe) {
     return false;
   }
 
-  const zIndex = Number.parseInt(style.zIndex, 10);
-  const isLayered = style.position === "fixed" || style.position === "absolute" || zIndex >= 10;
-  const isNearlyInvisible = Number.parseFloat(style.opacity || "1") <= 0.05;
+  const coverage = getViewportCoverage(rect, viewport);
   const reachesViewport =
-    rect.left <= viewportWidth * 0.15 &&
-    rect.top <= viewportHeight * 0.15 &&
-    rect.right >= viewportWidth * 0.85 &&
-    rect.bottom >= viewportHeight * 0.85;
+    rect.left <= viewport.width * 0.15 &&
+    rect.top <= viewport.height * 0.15 &&
+    rect.right >= viewport.width * 0.85 &&
+    rect.bottom >= viewport.height * 0.85;
 
-  return reachesViewport && (isNearlyInvisible || isLayered);
+  return coverage >= MIN_OVERLAY_COVERAGE && reachesViewport && isEffectivelyInvisible(iframe);
 }
 
 function shieldIframe(iframe) {
@@ -134,6 +174,18 @@ function shieldIframe(iframe) {
   iframe.style.pointerEvents = "none";
 }
 
+function restoreIframe(iframe) {
+  const previousPointerEvents = iframe.getAttribute(SHIELDED_IFRAME_ATTRIBUTE);
+
+  if (previousPointerEvents) {
+    iframe.style.pointerEvents = previousPointerEvents;
+  } else {
+    iframe.style.removeProperty("pointer-events");
+  }
+
+  iframe.removeAttribute(SHIELDED_IFRAME_ATTRIBUTE);
+}
+
 function scanForSuspiciousIframes() {
   if (!antiTabsEnabled || !isTopFrame()) {
     return;
@@ -142,21 +194,15 @@ function scanForSuspiciousIframes() {
   for (const iframe of document.querySelectorAll("iframe")) {
     if (isSuspiciousIframe(iframe)) {
       shieldIframe(iframe);
+    } else if (iframe.hasAttribute(SHIELDED_IFRAME_ATTRIBUTE)) {
+      restoreIframe(iframe);
     }
   }
 }
 
 function restoreShieldedIframes() {
   for (const iframe of document.querySelectorAll(`iframe[${SHIELDED_IFRAME_ATTRIBUTE}]`)) {
-    const previousPointerEvents = iframe.getAttribute(SHIELDED_IFRAME_ATTRIBUTE);
-
-    if (previousPointerEvents) {
-      iframe.style.pointerEvents = previousPointerEvents;
-    } else {
-      iframe.style.removeProperty("pointer-events");
-    }
-
-    iframe.removeAttribute(SHIELDED_IFRAME_ATTRIBUTE);
+    restoreIframe(iframe);
   }
 }
 
