@@ -1,12 +1,14 @@
 const STORAGE_KEY = "enabledOrigins";
 const MESSAGE_SOURCE = "ANTITABS_EXTENSION";
 const SHIELDED_IFRAME_ATTRIBUTE = "data-antitabs-shielded";
+const SHIELDED_ELEMENT_ATTRIBUTE = "data-antitabs-element-shielded";
 const MIN_OVERLAY_COVERAGE = 0.7;
 const INVISIBLE_OPACITY = 0.05;
+const EXTREME_Z_INDEX = 2147480000;
 
 let antiTabsEnabled = false;
-let iframeObserver = null;
-let iframeScanTimer = null;
+let overlayObserver = null;
+let overlayScanTimer = null;
 
 function getCurrentOrigin() {
   if (location.protocol !== "http:" && location.protocol !== "https:") {
@@ -54,14 +56,14 @@ async function refreshEnabledState() {
   if (!origin) {
     antiTabsEnabled = false;
     sendStateToPage();
-    updateIframeShield();
+    updateOverlayShield();
     return;
   }
 
   const result = await chrome.storage.local.get(STORAGE_KEY);
   antiTabsEnabled = Boolean((result[STORAGE_KEY] || {})[origin]);
   sendStateToPage();
-  updateIframeShield();
+  updateOverlayShield();
 }
 
 function findAnchor(event) {
@@ -141,6 +143,15 @@ function isEffectivelyInvisible(element) {
   return false;
 }
 
+function isTransparentColor(value) {
+  if (!value || value === "transparent") {
+    return true;
+  }
+
+  const compactValue = value.replace(/\s+/g, "").toLowerCase();
+  return compactValue === "rgba(0,0,0,0)" || compactValue === "rgb(0,0,0,0)";
+}
+
 function isSuspiciousIframe(iframe) {
   const rect = iframe.getBoundingClientRect();
   const viewport = getViewportSize();
@@ -151,7 +162,11 @@ function isSuspiciousIframe(iframe) {
 
   const style = getComputedStyle(iframe);
 
-  if (style.pointerEvents === "none" || style.display === "none" || style.visibility === "hidden") {
+  if (style.pointerEvents === "none" && !iframe.hasAttribute(SHIELDED_IFRAME_ATTRIBUTE)) {
+    return false;
+  }
+
+  if (style.display === "none" || style.visibility === "hidden") {
     return false;
   }
 
@@ -165,83 +180,155 @@ function isSuspiciousIframe(iframe) {
   return coverage >= MIN_OVERLAY_COVERAGE && reachesViewport && isEffectivelyInvisible(iframe);
 }
 
-function shieldIframe(iframe) {
-  if (iframe.hasAttribute(SHIELDED_IFRAME_ATTRIBUTE)) {
+function getElementZIndex(style) {
+  const zIndex = Number.parseInt(style.zIndex, 10);
+  return Number.isFinite(zIndex) ? zIndex : 0;
+}
+
+function hasVisibleInteractiveContent(element) {
+  if (element.textContent && element.textContent.trim()) {
+    return true;
+  }
+
+  return Boolean(element.querySelector(
+    "a[href], button, canvas, embed, iframe, img, input, object, select, svg, textarea, video"
+  ));
+}
+
+function isSuspiciousClickLayer(element) {
+  if (element === document.documentElement || element === document.body || element instanceof HTMLIFrameElement) {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  const viewport = getViewportSize();
+
+  if (rect.width <= 0 || rect.height <= 0) {
+    return false;
+  }
+
+  const style = getComputedStyle(element);
+
+  if (style.pointerEvents === "none" && !element.hasAttribute(SHIELDED_ELEMENT_ATTRIBUTE)) {
+    return false;
+  }
+
+  if (style.display === "none" || style.visibility === "hidden") {
+    return false;
+  }
+
+  if (style.position !== "fixed") {
+    return false;
+  }
+
+  if (getElementZIndex(style) < EXTREME_Z_INDEX) {
+    return false;
+  }
+
+  if (hasVisibleInteractiveContent(element)) {
+    return false;
+  }
+
+  const coverage = getViewportCoverage(rect, viewport);
+  const reachesViewport =
+    rect.left <= viewport.width * 0.05 &&
+    rect.top <= viewport.height * 0.05 &&
+    rect.right >= viewport.width * 0.95 &&
+    rect.bottom >= viewport.height * 0.95;
+
+  const isTransparent = isTransparentColor(style.backgroundColor) || parseOpacity(style.opacity) <= INVISIBLE_OPACITY;
+  return coverage >= MIN_OVERLAY_COVERAGE && reachesViewport && isTransparent;
+}
+
+function shieldElement(element, attributeName) {
+  if (element.hasAttribute(attributeName)) {
     return;
   }
 
-  iframe.setAttribute(SHIELDED_IFRAME_ATTRIBUTE, iframe.style.pointerEvents || "");
-  iframe.style.pointerEvents = "none";
+  element.setAttribute(attributeName, element.style.pointerEvents || "");
+  element.style.pointerEvents = "none";
 }
 
-function restoreIframe(iframe) {
-  const previousPointerEvents = iframe.getAttribute(SHIELDED_IFRAME_ATTRIBUTE);
+function restoreElement(element, attributeName) {
+  const previousPointerEvents = element.getAttribute(attributeName);
 
   if (previousPointerEvents) {
-    iframe.style.pointerEvents = previousPointerEvents;
+    element.style.pointerEvents = previousPointerEvents;
   } else {
-    iframe.style.removeProperty("pointer-events");
+    element.style.removeProperty("pointer-events");
   }
 
-  iframe.removeAttribute(SHIELDED_IFRAME_ATTRIBUTE);
+  element.removeAttribute(attributeName);
 }
 
-function scanForSuspiciousIframes() {
+function scanForSuspiciousOverlays() {
   if (!antiTabsEnabled || !isTopFrame()) {
     return;
   }
 
   for (const iframe of document.querySelectorAll("iframe")) {
     if (isSuspiciousIframe(iframe)) {
-      shieldIframe(iframe);
+      shieldElement(iframe, SHIELDED_IFRAME_ATTRIBUTE);
     } else if (iframe.hasAttribute(SHIELDED_IFRAME_ATTRIBUTE)) {
-      restoreIframe(iframe);
+      restoreElement(iframe, SHIELDED_IFRAME_ATTRIBUTE);
+    }
+  }
+
+  for (const element of document.querySelectorAll(`body *:not([${SHIELDED_IFRAME_ATTRIBUTE}])`)) {
+    if (isSuspiciousClickLayer(element)) {
+      shieldElement(element, SHIELDED_ELEMENT_ATTRIBUTE);
+    } else if (element.hasAttribute(SHIELDED_ELEMENT_ATTRIBUTE)) {
+      restoreElement(element, SHIELDED_ELEMENT_ATTRIBUTE);
     }
   }
 }
 
-function restoreShieldedIframes() {
+function restoreShieldedOverlays() {
   for (const iframe of document.querySelectorAll(`iframe[${SHIELDED_IFRAME_ATTRIBUTE}]`)) {
-    restoreIframe(iframe);
+    restoreElement(iframe, SHIELDED_IFRAME_ATTRIBUTE);
+  }
+
+  for (const element of document.querySelectorAll(`[${SHIELDED_ELEMENT_ATTRIBUTE}]`)) {
+    restoreElement(element, SHIELDED_ELEMENT_ATTRIBUTE);
   }
 }
 
-function updateIframeShield() {
+function updateOverlayShield() {
   if (!isTopFrame()) {
     return;
   }
 
   if (!antiTabsEnabled) {
-    if (iframeObserver) {
-      iframeObserver.disconnect();
-      iframeObserver = null;
+    if (overlayObserver) {
+      overlayObserver.disconnect();
+      overlayObserver = null;
     }
 
-    if (iframeScanTimer) {
-      clearInterval(iframeScanTimer);
-      iframeScanTimer = null;
+    if (overlayScanTimer) {
+      clearInterval(overlayScanTimer);
+      overlayScanTimer = null;
     }
 
-    restoreShieldedIframes();
+    restoreShieldedOverlays();
     return;
   }
 
-  if (!iframeObserver) {
+  if (!overlayObserver) {
     const observerRoot = document.documentElement || document;
 
-    iframeObserver = new MutationObserver(scanForSuspiciousIframes);
-    iframeObserver.observe(observerRoot, {
+    overlayObserver = new MutationObserver(scanForSuspiciousOverlays);
+    overlayObserver.observe(observerRoot, {
       attributes: true,
       childList: true,
       subtree: true
     });
   }
 
-  if (!iframeScanTimer) {
-    iframeScanTimer = setInterval(scanForSuspiciousIframes, 1000);
+  if (!overlayScanTimer) {
+    overlayScanTimer = setInterval(scanForSuspiciousOverlays, 1000);
   }
 
-  scanForSuspiciousIframes();
+  scanForSuspiciousOverlays();
 }
 
 refreshEnabledState();
@@ -262,4 +349,5 @@ chrome.runtime.onMessage.addListener((message) => {
 
   antiTabsEnabled = Boolean(message.enabled);
   sendStateToPage();
+  updateOverlayShield();
 });
