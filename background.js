@@ -212,7 +212,7 @@ async function closeIfOpenedByProtectedTab(openerTabId, openedTabId, targetUrl) 
     return;
   }
 
-  if (targetKind === "unknown" || targetKind === "blank") {
+  if (targetKind === "unknown") {
     rememberPendingTab(openedTabId, openerOrigin);
     return;
   }
