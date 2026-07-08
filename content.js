@@ -44,10 +44,25 @@ function sendStateToPage() {
   window.postMessage(
     {
       source: MESSAGE_SOURCE,
+      type: "STATE",
       enabled: antiTabsEnabled
     },
     "*"
   );
+}
+
+function recordProtectionEvent(eventType) {
+  if (!antiTabsEnabled) {
+    return;
+  }
+
+  chrome.runtime.sendMessage({
+    type: "ANTITABS_RECORD_EVENT",
+    eventType,
+    origin: getProtectedOrigin()
+  }).catch(() => {
+    // Stats are best-effort; protection should never depend on logging.
+  });
 }
 
 async function refreshEnabledState() {
@@ -96,6 +111,7 @@ function keepLinkInCurrentTab(event) {
 
   event.preventDefault();
   event.stopImmediatePropagation();
+  recordProtectionEvent("newTabLinkKept");
 
   if (isTopFrame()) {
     location.assign(anchor.href);
@@ -268,6 +284,10 @@ function scanForSuspiciousOverlays() {
 
   for (const iframe of document.querySelectorAll("iframe")) {
     if (isSuspiciousIframe(iframe)) {
+      if (!iframe.hasAttribute(SHIELDED_IFRAME_ATTRIBUTE)) {
+        recordProtectionEvent("iframeOverlayShielded");
+      }
+
       shieldElement(iframe, SHIELDED_IFRAME_ATTRIBUTE);
     } else if (iframe.hasAttribute(SHIELDED_IFRAME_ATTRIBUTE)) {
       restoreElement(iframe, SHIELDED_IFRAME_ATTRIBUTE);
@@ -276,6 +296,10 @@ function scanForSuspiciousOverlays() {
 
   for (const element of document.querySelectorAll(`body *:not([${SHIELDED_IFRAME_ATTRIBUTE}])`)) {
     if (isSuspiciousClickLayer(element)) {
+      if (!element.hasAttribute(SHIELDED_ELEMENT_ATTRIBUTE)) {
+        recordProtectionEvent("clickLayerShielded");
+      }
+
       shieldElement(element, SHIELDED_ELEMENT_ATTRIBUTE);
     } else if (element.hasAttribute(SHIELDED_ELEMENT_ATTRIBUTE)) {
       restoreElement(element, SHIELDED_ELEMENT_ATTRIBUTE);
@@ -335,6 +359,19 @@ refreshEnabledState();
 
 document.addEventListener("click", keepLinkInCurrentTab, true);
 document.addEventListener("auxclick", keepLinkInCurrentTab, true);
+
+window.addEventListener("message", (event) => {
+  if (
+    event.source !== window ||
+    !event.data ||
+    event.data.source !== MESSAGE_SOURCE ||
+    event.data.type !== "EVENT"
+  ) {
+    return;
+  }
+
+  recordProtectionEvent(event.data.eventType);
+});
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && changes[STORAGE_KEY]) {

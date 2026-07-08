@@ -11,7 +11,7 @@
 
 body {
   margin: 0;
-  min-width: 300px;
+  min-width: 340px;
 }
 
 .popup {
@@ -111,5 +111,100 @@ h1 {
   color: #a23d2b;
   font-size: 12px;
   line-height: 1.4;
+  margin: 0;
+}
+
+.stats {
+  display: grid;
+  gap: 12px;
+}
+
+.section-heading {
+  align-items: end;
+  display: flex;
+  justify-content: space-between;
+}
+
+.section-heading h2 {
+  font-size: 14px;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.section-heading small {
+  color: #727985;
+  display: block;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.stats-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.stat {
+  background: #ffffff;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.stat strong,
+.stat span {
+  display: block;
+}
+
+.stat strong {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.stat span {
+  color: #626873;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.recent {
+  background: #ffffff;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.recent h3 {
+  font-size: 13px;
+  line-height: 1.2;
+  margin: 0 0 8px;
+}
+
+.recent-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.recent-list li {
+  display: grid;
+  gap: 2px;
+}
+
+.recent-list strong {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.recent-list span,
+.empty {
+  color: #727985;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.empty {
   margin: 0;
 }

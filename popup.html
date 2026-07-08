@@ -23,6 +23,40 @@
         <span class="switch" aria-hidden="true"></span>
       </label>
 
+      <section class="stats" aria-labelledby="statsTitle">
+        <div class="section-heading">
+          <span>
+            <h2 id="statsTitle">This session</h2>
+            <small>Since the browser opened</small>
+          </span>
+        </div>
+
+        <div class="stats-grid">
+          <article class="stat">
+            <strong id="tabsClosedCount">0</strong>
+            <span>Tabs closed</span>
+          </article>
+          <article class="stat">
+            <strong id="popupsBlockedCount">0</strong>
+            <span>Popups blocked</span>
+          </article>
+          <article class="stat">
+            <strong id="overlaysShieldedCount">0</strong>
+            <span>Overlays cleared</span>
+          </article>
+          <article class="stat">
+            <strong id="linksKeptCount">0</strong>
+            <span>Links kept here</span>
+          </article>
+        </div>
+
+        <div class="recent">
+          <h3>Recent protections</h3>
+          <ol id="recentEvents" class="recent-list"></ol>
+          <p id="emptyStats" class="empty">No protections recorded yet.</p>
+        </div>
+      </section>
+
       <p id="message" class="message" hidden></p>
     </main>
     <script src="popup.js"></script>

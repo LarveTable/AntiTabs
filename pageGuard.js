@@ -11,7 +11,12 @@
   const originalOpen = window.open;
 
   window.addEventListener("message", (event) => {
-    if (event.source !== window || !event.data || event.data.source !== MESSAGE_SOURCE) {
+    if (
+      event.source !== window ||
+      !event.data ||
+      event.data.source !== MESSAGE_SOURCE ||
+      event.data.type !== "STATE"
+    ) {
       return;
     }
 
@@ -20,6 +25,15 @@
 
   window.open = function antiTabsOpenGuard(...args) {
     if (enabled) {
+      window.postMessage(
+        {
+          source: MESSAGE_SOURCE,
+          type: "EVENT",
+          eventType: "scriptPopupBlocked"
+        },
+        "*"
+      );
+
       return null;
     }
 
