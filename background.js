@@ -5,6 +5,10 @@ const MAX_RECENT_EVENTS = 8;
 const PENDING_TAB_TIMEOUT_MS = 10000;
 const BADGE_CLEAR_DELAY_MS = 3000;
 const ALLOW_BADGE_TEXT = "1";
+const ICON_PATHS = {
+  active: "icons/active.png",
+  inactive: "icons/unactive.png"
+};
 const pendingProtectedTabs = new Map();
 let statsWriteQueue = Promise.resolve();
 let badgeCount = 0;
@@ -92,6 +96,35 @@ function getTargetKind(url) {
 
 function getTargetUrl(tab) {
   return tab.pendingUrl || tab.url || "";
+}
+
+async function updateActionIconForTab(tab) {
+  if (!tab || tab.id == null) {
+    return;
+  }
+
+  const origin = getOrigin(getTargetUrl(tab));
+  const isEnabled = await isOriginEnabled(origin);
+
+  try {
+    await chrome.action.setIcon({
+      tabId: tab.id,
+      path: isEnabled ? ICON_PATHS.active : ICON_PATHS.inactive
+    });
+  } catch {
+    // Some browser-owned pages do not accept per-tab action updates.
+  }
+}
+
+async function updateActionIconForTabId(tabId) {
+  const tab = await getTab(tabId);
+  await updateActionIconForTab(tab);
+}
+
+async function updateAllActionIcons() {
+  const tabs = await chrome.tabs.query({});
+
+  await Promise.all(tabs.map((tab) => updateActionIconForTab(tab)));
 }
 
 async function hasActiveAllowance() {
@@ -339,10 +372,15 @@ async function closeIfOpenedByProtectedTab(openerTabId, openedTabId, targetUrl) 
 }
 
 chrome.tabs.onCreated.addListener((tab) => {
+  updateActionIconForTab(tab);
   closeIfOpenedByProtectedTab(tab.openerTabId, tab.id, getTargetUrl(tab));
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url || changeInfo.status === "complete") {
+    updateActionIconForTab(tab);
+  }
+
   if (!pendingProtectedTabs.has(tabId)) {
     return;
   }
@@ -381,6 +419,24 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   forgetPendingTab(tabId);
+});
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  updateActionIconForTabId(activeInfo.tabId);
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && changes[STORAGE_KEY]) {
+    updateAllActionIcons();
+  }
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  updateAllActionIcons();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  updateAllActionIcons();
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

@@ -1,16 +1,20 @@
 {
   "manifest_version": 3,
   "name": "AntiTabs",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Toggle protection against unwanted new tabs on the active website.",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["<all_urls>"],
+  "icons": {
+    "128": "icons/unactive.png"
+  },
   "background": {
     "service_worker": "background.js"
   },
   "action": {
     "default_title": "AntiTabs",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": "icons/unactive.png"
   },
   "content_scripts": [
     {
