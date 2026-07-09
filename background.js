@@ -137,6 +137,31 @@ async function updateAllActionIcons() {
   await Promise.all(tabs.map((tab) => updateActionIconForTab(tab)));
 }
 
+async function shouldSkipIconUpdateForNewTab(tab) {
+  if (!tab || tab.openerTabId == null) {
+    return false;
+  }
+
+  const openerTab = await getTab(tab.openerTabId);
+  const openerOrigin = openerTab && getOrigin(openerTab.url);
+
+  if (!(await isOriginEnabled(openerOrigin))) {
+    return false;
+  }
+
+  const targetKind = getTargetKind(getTargetUrl(tab));
+
+  if (targetKind === "internal") {
+    return false;
+  }
+
+  if (await isAllowNextEnabled(openerOrigin)) {
+    return false;
+  }
+
+  return true;
+}
+
 async function hasActiveAllowance() {
   const result = await getStorageSession().get(ALLOW_NEXT_KEY);
   return Object.keys(result[ALLOW_NEXT_KEY] || {}).length > 0;
@@ -381,17 +406,22 @@ async function closeIfOpenedByProtectedTab(openerTabId, openedTabId, targetUrl) 
   }
 }
 
-chrome.tabs.onCreated.addListener((tab) => {
-  updateActionIconForTab(tab);
+chrome.tabs.onCreated.addListener(async (tab) => {
+  if (!(await shouldSkipIconUpdateForNewTab(tab))) {
+    updateActionIconForTab(tab);
+  }
+
   closeIfOpenedByProtectedTab(tab.openerTabId, tab.id, getTargetUrl(tab));
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.url || changeInfo.status === "complete") {
+  const isPendingProtectedTab = pendingProtectedTabs.has(tabId);
+
+  if (!isPendingProtectedTab && (changeInfo.url || changeInfo.status === "complete")) {
     updateActionIconForTab(tab);
   }
 
-  if (!pendingProtectedTabs.has(tabId)) {
+  if (!isPendingProtectedTab) {
     return;
   }
 
