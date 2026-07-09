@@ -1,22 +1,31 @@
 # AntiTabs
 
-AntiTabs is a simple Microsoft Edge extension that helps stop websites from opening unwanted new tabs when you click around a page.
+AntiTabs is a browser extension that helps stop websites from opening unwanted tabs while you click around a page.
 
-The first version is intentionally small: it will provide a toggle switch so you can turn this protection on or off for the active browsing session.
+It is built for sites that use popups, hidden frames, transparent click layers, or forced `target="_blank"` navigation to push ads into new tabs. Protection is enabled per website from the toolbar popup, so you can keep it active only where you need it.
 
-## Goal
+## Features
 
-- Reduce annoying ad popups and forced new-tab behavior.
-- Keep normal browsing simple and predictable.
-- Start with a minimal extension that can be expanded later.
+- Blocks script-opened popup tabs from protected websites.
+- Keeps new-tab links in the current tab when protection is active.
+- Neutralizes suspicious invisible iframes and transparent full-page click layers.
+- Shows session statistics for blocked popups, closed tabs, cleared overlays, and links kept in place.
+- Pulses the toolbar badge when protection catches something.
+- Includes an **Allow once** mode for sites that intentionally require one new tab to open before continuing.
 
-## Load locally in Microsoft Edge
+## Allow Once
+
+Some sites gate a feature behind a new-tab navigation. When protection is on, use **Allow once** to let the next new tab open from the current website.
+
+After that single tab is allowed, AntiTabs automatically returns to normal blocking. The toolbar badge shows `1` while the allowance is armed.
+
+## Load Locally In Microsoft Edge
 
 1. Open `edge://extensions`.
 2. Turn on Developer mode.
 3. Choose **Load unpacked**.
 4. Select this project folder.
 
-Use the AntiTabs toolbar button to enable or disable protection for the current website.
+## Notes
 
-When protection is on, AntiTabs also runs inside embedded frames and neutralizes suspicious full-page iframe overlays that are commonly used to catch clicks for ad popups.
+This branch targets Microsoft Edge while the extension is still being developed. The core behavior is intentionally browser-agnostic so it can be ported to other browsers later.
