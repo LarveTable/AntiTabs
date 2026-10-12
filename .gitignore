@@ -1,2 +1,4 @@
 /dist/
 .DS_Store
+safari-app/**/xcuserdata/
+safari-app/build/

@@ -3,7 +3,10 @@
   "name": "AntiTabs",
   "version": "0.1.14",
   "description": "Toggle protection against unwanted new tabs on the active website.",
-  "permissions": ["storage", "tabs"],
+  "browser_specific_settings": {
+    "safari": { "strict_min_version": "18.4" }
+  },
+  "permissions": ["storage", "tabs", "scripting", "alarms"],
   "host_permissions": ["<all_urls>"],
   "icons": {
     "16": "icons/unactive-16.png",
@@ -23,24 +26,5 @@
       "48": "icons/unactive-48.png",
       "128": "icons/unactive-128.png"
     }
-  },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["pageGuard.js"],
-      "run_at": "document_start",
-      "world": "MAIN",
-      "all_frames": true,
-      "match_about_blank": true,
-      "match_origin_as_fallback": true
-    },
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "run_at": "document_start",
-      "all_frames": true,
-      "match_about_blank": true,
-      "match_origin_as_fallback": true
-    }
-  ]
+  }
 }

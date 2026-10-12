@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.14 Safari port — 2026-10-13
+
+- Added a macOS Safari app and web extension project that uses the extension files at the repository root.
+- Registered the page guard and content script through Safari's scripting API to preserve early injection, execution worlds, and matching frames.
+- Preserved pending tab and decision state across background worker restarts, with alarms backing up the existing timeouts.
+- Required Safari 18.4 or later and documented Safari website access and signing steps.
+
 ## 0.1.14 — 2026-10-13
 
 - Added global settings for new-tab links: ask first, or open automatically in the current tab.

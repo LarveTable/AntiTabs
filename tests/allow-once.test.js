@@ -35,6 +35,11 @@ function createBackground(initialAllowance = true) {
       onStartup: on("startup"),
       onMessage: on("message")
     },
+    alarms: {
+      onAlarm: on("alarm"),
+      async create() {},
+      async clear() { return true; }
+    },
     action: {
       setBadgeText() {},
       setBadgeBackgroundColor() {},

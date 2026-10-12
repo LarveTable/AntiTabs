@@ -9,11 +9,12 @@ const ORIGIN = "https://example.com";
 const LINK = "https://destination.example/path";
 const POPUP = "https://ads.example/offer";
 
-function createBackground(settings) {
+function createBackground(settings, initialData = {}) {
   const data = {
     enabledOrigins: { [ORIGIN]: true },
     allowNextTabOrigins: {},
-    ...(settings && { behaviorSettings: settings })
+    ...(settings && { behaviorSettings: settings }),
+    ...structuredClone(initialData)
   };
   const tabs = new Map([
     [10, { id: 10, url: `${ORIGIN}/page`, active: true }],
@@ -24,6 +25,7 @@ function createBackground(settings) {
   const created = [];
   const removed = [];
   const timers = new Map();
+  const alarms = new Map();
   const listeners = {};
   let timerId = 0;
   const on = (name) => ({ addListener(listener) { listeners[name] = listener; } });
@@ -60,6 +62,11 @@ function createBackground(settings) {
       async remove(tabId) { removed.push(tabId); tabs.delete(tabId); }
     },
     runtime: { onInstalled: on("installed"), onStartup: on("startup"), onMessage: on("message") },
+    alarms: {
+      onAlarm: on("alarm"),
+      async create(name, info) { alarms.set(name, info); },
+      async clear(name) { return alarms.delete(name); }
+    },
     action: {
       async setIcon() {},
       setBadgeText() {},
@@ -80,7 +87,7 @@ function createBackground(settings) {
   vm.runInContext(code, context);
 
   return {
-    data, tabs, sent, updated, created, removed, timers, listeners,
+    data, tabs, sent, updated, created, removed, timers, alarms, listeners,
     call(expression) { return vm.runInContext(expression, context); },
     message(message, sender = { tab: tabs.get(10), frameId: 0 }) {
       return new Promise((resolve) => {
@@ -205,4 +212,30 @@ test("a destination reported during onCreated is still prompted", async () => {
 
   assert.equal(bg.prompt().url, POPUP);
   assert.deepEqual(bg.removed, []);
+});
+
+test("popup decision survives a Safari service worker restart", async () => {
+  const original = createBackground({ confirmPopupTabs: true });
+  await original.call(`handlePopupTab(10, 20, "${ORIGIN}", "${POPUP}")`);
+  const promptId = original.prompt().promptId;
+  assert.ok(original.alarms.has(`antitabs-decision:${promptId}`));
+
+  const restarted = createBackground({ confirmPopupTabs: true }, original.data);
+  restarted.listeners.alarm({ name: `antitabs-decision:${promptId}` });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(restarted.removed, [20]);
+  assert.deepEqual(restarted.data.pendingSafariActions.decisions, []);
+});
+
+test("unresolved new tabs survive a Safari service worker restart", async () => {
+  const original = createBackground();
+  original.call(`rememberPendingTab(20, "${ORIGIN}", 10)`);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(original.alarms.has("antitabs-pending-tab:20"));
+
+  const restarted = createBackground(undefined, original.data);
+  restarted.listeners.alarm({ name: "antitabs-pending-tab:20" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(restarted.removed, [20]);
+  assert.deepEqual(restarted.data.pendingSafariActions.tabs, []);
 });

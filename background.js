@@ -2,11 +2,36 @@ const STORAGE_KEY = "enabledOrigins";
 const STATS_KEY = "sessionStats";
 const ALLOW_NEXT_KEY = "allowNextTabOrigins";
 const SETTINGS_KEY = "behaviorSettings";
+const PENDING_STATE_KEY = "pendingSafariActions";
 const MAX_RECENT_EVENTS = 8;
 const PENDING_TAB_TIMEOUT_MS = 10000;
 const DECISION_TIMEOUT_MS = 20000;
 const BADGE_CLEAR_DELAY_MS = 3000;
 const ALLOW_BADGE_TEXT = "1";
+const DECISION_ALARM_PREFIX = "antitabs-decision:";
+const TAB_ALARM_PREFIX = "antitabs-pending-tab:";
+const SAFARI_CONTENT_SCRIPTS = [
+  {
+    id: "antitabs-page-guard",
+    js: ["pageGuard.js"],
+    matches: ["<all_urls>"],
+    runAt: "document_start",
+    allFrames: true,
+    matchOriginAsFallback: true,
+    world: "MAIN",
+    persistAcrossSessions: true
+  },
+  {
+    id: "antitabs-content",
+    js: ["content.js"],
+    matches: ["<all_urls>"],
+    runAt: "document_start",
+    allFrames: true,
+    matchOriginAsFallback: true,
+    world: "ISOLATED",
+    persistAcrossSessions: true
+  }
+];
 const ICON_PATHS = {
   active: {
     16: "icons/active-16.png",
@@ -29,6 +54,64 @@ let statsWriteQueue = Promise.resolve();
 let allowNextWriteQueue = Promise.resolve();
 let badgeCount = 0;
 let badgeClearTimer = null;
+let contentScriptRegistration = Promise.resolve();
+let pendingStateWriteQueue = Promise.resolve();
+
+const pendingStateReady = (async () => {
+  const stored = (await getStorageSession().get(PENDING_STATE_KEY))[PENDING_STATE_KEY] || {};
+  for (const decision of stored.decisions || []) {
+    pendingDecisions.set(decision.promptId, decision);
+  }
+  for (const pendingTab of stored.tabs || []) {
+    pendingProtectedTabs.set(pendingTab.tabId, pendingTab);
+  }
+})().catch((error) => {
+  console.error("AntiTabs could not restore pending Safari actions", error);
+});
+
+function savePendingState() {
+  const state = {
+    decisions: [...pendingDecisions.values()].map(({ timeoutId, ...decision }) => decision),
+    tabs: [...pendingProtectedTabs.entries()].map(([tabId, { timeoutId, ...tab }]) => ({
+      tabId, ...tab
+    }))
+  };
+  const write = pendingStateWriteQueue.catch(() => {}).then(async () => {
+    await pendingStateReady;
+    await getStorageSession().set({ [PENDING_STATE_KEY]: state });
+  });
+  pendingStateWriteQueue = write.catch(() => {});
+  return write;
+}
+
+function ensureContentScripts() {
+  const registration = contentScriptRegistration.catch(() => {}).then(async () => {
+    const registered = await chrome.scripting.getRegisteredContentScripts({
+      ids: SAFARI_CONTENT_SCRIPTS.map((script) => script.id)
+    });
+    const registeredIds = new Set(registered.map((script) => script.id));
+
+    // Register the main-world guard first so it is ready when content.js sends state.
+    const failedScripts = [];
+    for (const script of SAFARI_CONTENT_SCRIPTS) {
+      if (!registeredIds.has(script.id)) {
+        try {
+          await chrome.scripting.registerContentScripts([script]);
+        } catch (error) {
+          failedScripts.push({ id: script.id, error });
+        }
+      }
+    }
+    if (failedScripts.length) {
+      throw new AggregateError(
+        failedScripts.map(({ error }) => error),
+        `Could not register Safari content scripts: ${failedScripts.map(({ id }) => id).join(", ")}`
+      );
+    }
+  });
+  contentScriptRegistration = registration.catch(() => {});
+  return registration;
+}
 
 const DEFAULT_STATS = {
   counts: {
@@ -214,7 +297,7 @@ async function showAllowanceBadgeIfNeeded() {
   badgeCount = 0;
   chrome.action.setBadgeText({ text: ALLOW_BADGE_TEXT });
   chrome.action.setBadgeBackgroundColor({ color: "#f59e0b" });
-  chrome.action.setBadgeTextColor({ color: "#111827" });
+  chrome.action.setBadgeTextColor?.({ color: "#111827" });
   return true;
 }
 
@@ -243,7 +326,7 @@ async function pulseBadge() {
 
   chrome.action.setBadgeText({ text: `+${Math.min(badgeCount, 9)}` });
   chrome.action.setBadgeBackgroundColor({ color: "#246bfe" });
-  chrome.action.setBadgeTextColor({ color: "#ffffff" });
+  chrome.action.setBadgeTextColor?.({ color: "#ffffff" });
 
   badgeClearTimer = setTimeout(() => {
     badgeCount = 0;
@@ -435,6 +518,7 @@ async function dismissDecisionInPage(decision) {
 }
 
 async function resolveDecision(promptId, choice, respondingTabId = null) {
+  await pendingStateReady;
   const decision = pendingDecisions.get(promptId);
 
   if (!decision || (respondingTabId != null && respondingTabId !== decision.openerTabId)) {
@@ -451,6 +535,8 @@ async function resolveDecision(promptId, choice, respondingTabId = null) {
 
   pendingDecisions.delete(promptId);
   clearTimeout(decision.timeoutId);
+  await savePendingState();
+  await chrome.alarms.clear(`${DECISION_ALARM_PREFIX}${promptId}`).catch(() => {});
 
   if (respondingTabId == null) {
     await dismissDecisionInPage(decision);
@@ -496,6 +582,7 @@ async function resolveDecision(promptId, choice, respondingTabId = null) {
 }
 
 async function askForDecision(details) {
+  await pendingStateReady;
   const promptId = `${Date.now()}-${++nextDecisionId}`;
   const defaultChoice = details.kind === "popup" ? "close" : "stay";
   const timeoutId = setTimeout(() => {
@@ -503,6 +590,16 @@ async function askForDecision(details) {
   }, DECISION_TIMEOUT_MS);
   const decision = { ...details, promptId, timeoutId };
   pendingDecisions.set(promptId, decision);
+
+  try {
+    await savePendingState();
+    await chrome.alarms.create(`${DECISION_ALARM_PREFIX}${promptId}`, {
+      when: Date.now() + DECISION_TIMEOUT_MS
+    });
+  } catch {
+    await resolveDecision(promptId, defaultChoice);
+    return false;
+  }
 
   try {
     await chrome.tabs.sendMessage(details.openerTabId, {
@@ -585,7 +682,7 @@ function rememberPendingTab(tabId, origin, openerTabId) {
 
   const timeoutId = setTimeout(() => {
     const pendingTab = pendingProtectedTabs.get(tabId);
-    pendingProtectedTabs.delete(tabId);
+    forgetPendingTab(tabId);
 
     if (pendingTab) {
       handlePopupTab(openerTabId, tabId, origin, "").catch(() => {});
@@ -593,6 +690,10 @@ function rememberPendingTab(tabId, origin, openerTabId) {
   }, PENDING_TAB_TIMEOUT_MS);
 
   pendingProtectedTabs.set(tabId, { origin, openerTabId, timeoutId });
+  savePendingState().catch(() => {});
+  chrome.alarms.create(`${TAB_ALARM_PREFIX}${tabId}`, {
+    when: Date.now() + PENDING_TAB_TIMEOUT_MS
+  }).catch(() => {});
 }
 
 function forgetPendingTab(tabId) {
@@ -603,9 +704,14 @@ function forgetPendingTab(tabId) {
   }
 
   pendingProtectedTabs.delete(tabId);
+  if (pendingTab) {
+    savePendingState().catch(() => {});
+    chrome.alarms.clear(`${TAB_ALARM_PREFIX}${tabId}`).catch(() => {});
+  }
 }
 
 async function closeIfOpenedByProtectedTab(openerTabId, openedTabId, targetUrl) {
+  await pendingStateReady;
   if (openerTabId == null || openedTabId == null) {
     return;
   }
@@ -661,6 +767,10 @@ chrome.tabs.onCreated.addListener((tab) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  pendingStateReady.then(() => handleUpdatedTab(tabId, changeInfo, tab)).catch(() => {});
+});
+
+function handleUpdatedTab(tabId, changeInfo, tab) {
   if (openingTabUrls.has(tabId)) {
     openingTabUrls.set(tabId, changeInfo.url || getTargetUrl(tab) || openingTabUrls.get(tabId));
   }
@@ -697,9 +807,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     }).catch(() => {});
     return;
   }
-});
+}
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  pendingStateReady.then(() => handleRemovedTab(tabId)).catch(() => {});
+});
+
+function handleRemovedTab(tabId) {
   openingTabUrls.delete(tabId);
   forgetPendingTab(tabId);
 
@@ -707,6 +821,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     if (decision.openerTabId === tabId || decision.popupTabId === tabId) {
       pendingDecisions.delete(promptId);
       clearTimeout(decision.timeoutId);
+      savePendingState().catch(() => {});
+      chrome.alarms.clear(`${DECISION_ALARM_PREFIX}${promptId}`).catch(() => {});
 
       if (decision.popupTabId === tabId) {
         dismissDecisionInPage(decision);
@@ -715,6 +831,28 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       }
     }
   }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  pendingStateReady.then(async () => {
+    if (alarm.name.startsWith(DECISION_ALARM_PREFIX)) {
+      const promptId = alarm.name.slice(DECISION_ALARM_PREFIX.length);
+      const decision = pendingDecisions.get(promptId);
+      if (decision) {
+        await resolveDecision(promptId, decision.kind === "popup" ? "close" : "stay");
+      }
+      return;
+    }
+
+    if (alarm.name.startsWith(TAB_ALARM_PREFIX)) {
+      const tabId = Number(alarm.name.slice(TAB_ALARM_PREFIX.length));
+      const pendingTab = pendingProtectedTabs.get(tabId);
+      if (pendingTab) {
+        forgetPendingTab(tabId);
+        await handlePopupTab(pendingTab.openerTabId, tabId, pendingTab.origin, "");
+      }
+    }
+  }).catch(() => {});
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
@@ -728,10 +866,12 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
+  ensureContentScripts().catch((error) => console.error("AntiTabs Safari setup failed", error));
   updateAllActionIcons();
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  ensureContentScripts().catch((error) => console.error("AntiTabs Safari setup failed", error));
   updateAllActionIcons();
 });
 
