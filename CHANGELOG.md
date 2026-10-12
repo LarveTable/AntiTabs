@@ -8,3 +8,4 @@
 - Updated overlay detection to scan changed content and tracked viewport candidates instead of repeatedly scanning the entire page.
 - Shortened long destination URLs in decision dialogs while retaining the complete URL for the chosen action.
 - Added unit tests for tab decisions, popup settings, overlay scanning, and Allow once.
+- Ignored macOS `.DS_Store` files in the repository.
