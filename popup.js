@@ -6,6 +6,8 @@ const allowNextPanel = document.querySelector("#allowNextPanel");
 const allowNextTitle = document.querySelector("#allowNextTitle");
 const allowNextDescription = document.querySelector("#allowNextDescription");
 const allowNextButton = document.querySelector("#allowNextButton");
+const linkHandling = document.querySelector("#linkHandling");
+const confirmPopupTabs = document.querySelector("#confirmPopupTabs");
 const tabsClosedCount = document.querySelector("#tabsClosedCount");
 const popupsBlockedCount = document.querySelector("#popupsBlockedCount");
 const overlaysShieldedCount = document.querySelector("#overlaysShieldedCount");
@@ -16,11 +18,34 @@ const emptyStats = document.querySelector("#emptyStats");
 const STORAGE_KEY = "enabledOrigins";
 const STATS_KEY = "sessionStats";
 const ALLOW_NEXT_KEY = "allowNextTabOrigins";
+const SETTINGS_KEY = "behaviorSettings";
 
 let currentOrigin = null;
 let currentTabId = null;
 let currentProtectionEnabled = false;
 let currentAllowNextEnabled = false;
+let settingsWriteQueue = Promise.resolve();
+
+function applySettings(settings = {}) {
+  linkHandling.value = settings.linkHandling === "current" ? "current" : "ask";
+  confirmPopupTabs.checked = settings.confirmPopupTabs === true;
+}
+
+async function loadSettings() {
+  const result = await chrome.storage.local.get(SETTINGS_KEY);
+  applySettings(result[SETTINGS_KEY]);
+}
+
+function saveSettings() {
+  const settings = {
+    linkHandling: linkHandling.value === "current" ? "current" : "ask",
+    confirmPopupTabs: confirmPopupTabs.checked
+  };
+
+  settingsWriteQueue = settingsWriteQueue.catch(() => {}).then(() =>
+    chrome.storage.local.set({ [SETTINGS_KEY]: settings }));
+  return settingsWriteQueue;
+}
 
 function getOrigin(url) {
   try {
@@ -165,6 +190,7 @@ async function notifyActiveTabAllowNext(isEnabled) {
 }
 
 async function initialize() {
+  await loadSettings();
   await refreshStats();
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -232,7 +258,19 @@ allowNextButton.addEventListener("click", async () => {
   await notifyActiveTabAllowNext(allowNextTab);
 });
 
+linkHandling.addEventListener("change", () => {
+  saveSettings().catch(() => setMessage("Could not save settings. Try again."));
+});
+
+confirmPopupTabs.addEventListener("change", () => {
+  saveSettings().catch(() => setMessage("Could not save settings. Try again."));
+});
+
 chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && changes[SETTINGS_KEY]) {
+    applySettings(changes[SETTINGS_KEY].newValue);
+  }
+
   if (areaName === "session" && changes[STATS_KEY]) {
     renderStats(changes[STATS_KEY].newValue);
   }

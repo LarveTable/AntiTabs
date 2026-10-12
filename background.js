@@ -1,8 +1,10 @@
 const STORAGE_KEY = "enabledOrigins";
 const STATS_KEY = "sessionStats";
 const ALLOW_NEXT_KEY = "allowNextTabOrigins";
+const SETTINGS_KEY = "behaviorSettings";
 const MAX_RECENT_EVENTS = 8;
 const PENDING_TAB_TIMEOUT_MS = 10000;
+const DECISION_TIMEOUT_MS = 20000;
 const BADGE_CLEAR_DELAY_MS = 3000;
 const ALLOW_BADGE_TEXT = "1";
 const ICON_PATHS = {
@@ -20,7 +22,11 @@ const ICON_PATHS = {
   }
 };
 const pendingProtectedTabs = new Map();
+const openingTabUrls = new Map();
+const pendingDecisions = new Map();
+let nextDecisionId = 0;
 let statsWriteQueue = Promise.resolve();
+let allowNextWriteQueue = Promise.resolve();
 let badgeCount = 0;
 let badgeClearTimer = null;
 
@@ -54,6 +60,18 @@ const EVENT_DETAILS = {
     countKeys: ["linksKept"],
     label: "New-tab link kept here"
   },
+  newTabLinkOpened: {
+    countKeys: [],
+    label: "New-tab link opened in a new tab"
+  },
+  newTabLinkDismissed: {
+    countKeys: [],
+    label: "New-tab link left unopened"
+  },
+  popupTabAllowed: {
+    countKeys: ["allowedTabs"],
+    label: "Popup tab allowed after asking"
+  },
   iframeOverlayShielded: {
     countKeys: ["overlaysShielded", "iframeOverlaysShielded"],
     label: "Invisible iframe neutralized"
@@ -76,6 +94,26 @@ function getOrigin(url) {
   } catch {
     return null;
   }
+}
+
+function getWebUrl(url) {
+  try {
+    const parsedUrl = new URL(url);
+    return parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:"
+      ? parsedUrl.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readBehaviorSettings() {
+  const result = await chrome.storage.local.get(SETTINGS_KEY);
+  const settings = result[SETTINGS_KEY] || {};
+  return {
+    linkHandling: settings.linkHandling === "current" ? "current" : "ask",
+    confirmPopupTabs: settings.confirmPopupTabs === true
+  };
 }
 
 function getStorageSession() {
@@ -237,31 +275,68 @@ async function isAllowNextEnabled(origin) {
   return Boolean(allowNextOrigins[origin]);
 }
 
+async function notifyAllowNextState(origin, isEnabled) {
+  let tabs;
+
+  try {
+    tabs = await chrome.tabs.query({});
+  } catch {
+    return;
+  }
+
+  await Promise.all(tabs
+    .filter((tab) => tab.id != null && getOrigin(tab.url) === origin)
+    .map((tab) => chrome.tabs.sendMessage(tab.id, {
+      type: "ANTITABS_ALLOW_NEXT_STATE",
+      allowNextTab: isEnabled
+    }).catch(() => {})));
+}
+
+function queueAllowNextChange(change) {
+  const result = allowNextWriteQueue.catch(() => {}).then(change);
+  allowNextWriteQueue = result.catch(() => {});
+  return result;
+}
+
 async function setAllowNextOrigin(origin, isEnabled) {
   if (!origin) {
     return false;
   }
 
-  const allowNextOrigins = await readAllowNextOrigins();
+  return queueAllowNextChange(async () => {
+    const allowNextOrigins = await readAllowNextOrigins();
 
-  if (isEnabled) {
-    allowNextOrigins[origin] = true;
-  } else {
-    delete allowNextOrigins[origin];
-  }
+    if (isEnabled) {
+      allowNextOrigins[origin] = true;
+    } else {
+      delete allowNextOrigins[origin];
+    }
 
-  await getStorageSession().set({ [ALLOW_NEXT_KEY]: allowNextOrigins });
-  await refreshBadge();
-  return Boolean(allowNextOrigins[origin]);
+    await getStorageSession().set({ [ALLOW_NEXT_KEY]: allowNextOrigins });
+    await refreshBadge();
+    await notifyAllowNextState(origin, isEnabled);
+    return Boolean(allowNextOrigins[origin]);
+  });
 }
 
 async function consumeAllowNextOrigin(origin) {
-  if (!(await isAllowNextEnabled(origin))) {
+  if (!origin) {
     return false;
   }
 
-  await setAllowNextOrigin(origin, false);
-  return true;
+  return queueAllowNextChange(async () => {
+    const allowNextOrigins = await readAllowNextOrigins();
+
+    if (!allowNextOrigins[origin]) {
+      return false;
+    }
+
+    delete allowNextOrigins[origin];
+    await getStorageSession().set({ [ALLOW_NEXT_KEY]: allowNextOrigins });
+    await refreshBadge();
+    await notifyAllowNextState(origin, false);
+    return true;
+  });
 }
 
 function createEmptyStats() {
@@ -348,14 +423,176 @@ async function closeTab(tabId) {
   }
 }
 
-function rememberPendingTab(tabId, origin) {
+async function dismissDecisionInPage(decision) {
+  try {
+    await chrome.tabs.sendMessage(decision.openerTabId, {
+      type: "ANTITABS_DISMISS_DECISION",
+      promptId: decision.promptId
+    }, { frameId: 0 });
+  } catch {
+    // The source page may have closed or navigated.
+  }
+}
+
+async function resolveDecision(promptId, choice, respondingTabId = null) {
+  const decision = pendingDecisions.get(promptId);
+
+  if (!decision || (respondingTabId != null && respondingTabId !== decision.openerTabId)) {
+    return false;
+  }
+
+  if (decision.kind === "link" && !["current", "new", "stay"].includes(choice)) {
+    return false;
+  }
+
+  if (decision.kind === "popup" && !["allow", "close"].includes(choice)) {
+    return false;
+  }
+
+  pendingDecisions.delete(promptId);
+  clearTimeout(decision.timeoutId);
+
+  if (respondingTabId == null) {
+    await dismissDecisionInPage(decision);
+  }
+
+  if (decision.kind === "link") {
+    if (choice === "current") {
+      try {
+        await chrome.tabs.update(decision.openerTabId, { url: decision.url });
+        await recordProtectionEvent("newTabLinkKept", { origin: decision.origin });
+      } catch {
+        return false;
+      }
+    } else if (choice === "new") {
+      try {
+        await chrome.tabs.create({ url: decision.url });
+        await recordProtectionEvent("newTabLinkOpened", { origin: decision.origin }, { pulse: false });
+      } catch {
+        return false;
+      }
+    } else {
+      await recordProtectionEvent("newTabLinkDismissed", { origin: decision.origin }, { pulse: false });
+    }
+
+    return true;
+  }
+
+  if (choice === "allow") {
+    try {
+      await chrome.tabs.update(decision.popupTabId, { active: true });
+      await recordProtectionEvent("popupTabAllowed", { origin: decision.origin }, { pulse: false });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  if (await closeTab(decision.popupTabId)) {
+    await recordProtectionEvent("adTabClosed", { origin: decision.origin });
+  }
+
+  return true;
+}
+
+async function askForDecision(details) {
+  const promptId = `${Date.now()}-${++nextDecisionId}`;
+  const defaultChoice = details.kind === "popup" ? "close" : "stay";
+  const timeoutId = setTimeout(() => {
+    resolveDecision(promptId, defaultChoice).catch(() => {});
+  }, DECISION_TIMEOUT_MS);
+  const decision = { ...details, promptId, timeoutId };
+  pendingDecisions.set(promptId, decision);
+
+  try {
+    await chrome.tabs.sendMessage(details.openerTabId, {
+      type: "ANTITABS_SHOW_DECISION",
+      promptId,
+      kind: details.kind,
+      origin: details.origin,
+      url: details.url
+    }, { frameId: 0 });
+  } catch {
+    await resolveDecision(promptId, defaultChoice);
+    return false;
+  }
+
+  return true;
+}
+
+async function handleNewTabLink(url, sender) {
+  const tabId = sender.tab && sender.tab.id;
+  const origin = sender.tab && getOrigin(sender.tab.url);
+  const webUrl = getWebUrl(url);
+
+  if (tabId == null || !origin || !webUrl || !(await isOriginEnabled(origin))) {
+    return false;
+  }
+
+  const settings = await readBehaviorSettings();
+
+  if (settings.linkHandling === "current") {
+    try {
+      await chrome.tabs.update(tabId, { url: webUrl });
+      await recordProtectionEvent("newTabLinkKept", { origin });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return askForDecision({ kind: "link", openerTabId: tabId, origin, url: webUrl });
+}
+
+async function handlePopupTab(openerTabId, openedTabId, origin, targetUrl) {
+  const settings = await readBehaviorSettings();
+
+  if (!settings.confirmPopupTabs) {
+    if (await closeTab(openedTabId)) {
+      await recordProtectionEvent("adTabClosed", { origin });
+    }
+    return;
+  }
+
+  const popupTab = await getTab(openedTabId);
+
+  if (!popupTab) {
+    return;
+  }
+
+  try {
+    if (popupTab.active) {
+      await chrome.tabs.update(openerTabId, { active: true });
+    }
+  } catch {
+    if (await closeTab(openedTabId)) {
+      await recordProtectionEvent("adTabClosed", { origin });
+    }
+    return;
+  }
+
+  await askForDecision({
+    kind: "popup",
+    openerTabId,
+    popupTabId: openedTabId,
+    origin,
+    url: getWebUrl(targetUrl)
+  });
+}
+
+function rememberPendingTab(tabId, origin, openerTabId) {
   forgetPendingTab(tabId);
 
   const timeoutId = setTimeout(() => {
+    const pendingTab = pendingProtectedTabs.get(tabId);
     pendingProtectedTabs.delete(tabId);
+
+    if (pendingTab) {
+      handlePopupTab(openerTabId, tabId, origin, "").catch(() => {});
+    }
   }, PENDING_TAB_TIMEOUT_MS);
 
-  pendingProtectedTabs.set(tabId, { origin, timeoutId });
+  pendingProtectedTabs.set(tabId, { origin, openerTabId, timeoutId });
 }
 
 function forgetPendingTab(tabId) {
@@ -380,41 +617,54 @@ async function closeIfOpenedByProtectedTab(openerTabId, openedTabId, targetUrl) 
     return;
   }
 
-  const targetKind = getTargetKind(targetUrl);
+  let currentTargetUrl = openingTabUrls.get(openedTabId) || targetUrl;
 
-  if (targetKind === "internal") {
+  if (getTargetKind(currentTargetUrl) === "internal") {
     forgetPendingTab(openedTabId);
     return;
   }
 
   if (await consumeAllowNextOrigin(openerOrigin)) {
     await recordProtectionEvent("allowedNextTab", { origin: openerOrigin }, { pulse: false });
-    chrome.tabs.sendMessage(openerTabId, {
-      type: "ANTITABS_ALLOW_NEXT_STATE",
-      allowNextTab: false
-    }).catch(() => {});
+    return;
+  }
+
+  currentTargetUrl = openingTabUrls.get(openedTabId) || currentTargetUrl;
+  const targetKind = getTargetKind(currentTargetUrl);
+
+  if (targetKind === "internal") {
     return;
   }
 
   if (targetKind === "unknown") {
-    rememberPendingTab(openedTabId, openerOrigin);
+    rememberPendingTab(openedTabId, openerOrigin, openerTabId);
     return;
   }
 
-  if (await closeTab(openedTabId)) {
-    await recordProtectionEvent("adTabClosed", { origin: openerOrigin });
-  }
+  await handlePopupTab(openerTabId, openedTabId, openerOrigin, currentTargetUrl);
 }
 
-chrome.tabs.onCreated.addListener(async (tab) => {
-  if (!(await shouldSkipIconUpdateForNewTab(tab))) {
-    updateActionIconForTab(tab);
+chrome.tabs.onCreated.addListener((tab) => {
+  if (tab.openerTabId != null) {
+    openingTabUrls.set(tab.id, getTargetUrl(tab));
   }
 
-  closeIfOpenedByProtectedTab(tab.openerTabId, tab.id, getTargetUrl(tab));
+  shouldSkipIconUpdateForNewTab(tab).then((shouldSkip) => {
+    if (!shouldSkip) {
+      updateActionIconForTab(tab);
+    }
+  }).catch(() => {});
+
+  closeIfOpenedByProtectedTab(tab.openerTabId, tab.id, getTargetUrl(tab))
+    .catch(() => {})
+    .finally(() => openingTabUrls.delete(tab.id));
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (openingTabUrls.has(tabId)) {
+    openingTabUrls.set(tabId, changeInfo.url || getTargetUrl(tab) || openingTabUrls.get(tabId));
+  }
+
   const isPendingProtectedTab = pendingProtectedTabs.has(tabId);
 
   if (!isPendingProtectedTab && (changeInfo.url || changeInfo.status === "complete")) {
@@ -433,32 +683,38 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     return;
   }
 
-  if (targetKind === "web") {
-    const openerOrigin = pendingProtectedTabs.get(tabId).origin;
+  if (targetKind === "web" || targetKind === "blank") {
+    const { origin, openerTabId } = pendingProtectedTabs.get(tabId);
     forgetPendingTab(tabId);
 
-    isAllowNextEnabled(openerOrigin).then((allowNextTab) => {
-      if (!allowNextTab) {
-        closeTab(tabId).then((wasClosed) => {
-          if (wasClosed) {
-            recordProtectionEvent("adTabClosed", { origin: openerOrigin });
-          }
-        });
+    consumeAllowNextOrigin(origin).then((wasConsumed) => {
+      if (!wasConsumed) {
+        handlePopupTab(openerTabId, tabId, origin, targetUrl).catch(() => {});
         return;
       }
 
-      consumeAllowNextOrigin(openerOrigin).then((wasConsumed) => {
-        if (wasConsumed) {
-          recordProtectionEvent("allowedNextTab", { origin: openerOrigin }, { pulse: false });
-        }
-      });
-    });
+      recordProtectionEvent("allowedNextTab", { origin }, { pulse: false });
+    }).catch(() => {});
     return;
   }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  openingTabUrls.delete(tabId);
   forgetPendingTab(tabId);
+
+  for (const [promptId, decision] of pendingDecisions) {
+    if (decision.openerTabId === tabId || decision.popupTabId === tabId) {
+      pendingDecisions.delete(promptId);
+      clearTimeout(decision.timeoutId);
+
+      if (decision.popupTabId === tabId) {
+        dismissDecisionInPage(decision);
+      } else if (decision.kind === "popup") {
+        closeTab(decision.popupTabId);
+      }
+    }
+  }
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
@@ -488,6 +744,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const origin = message.origin || (sender.tab && getOrigin(sender.tab.url));
     recordProtectionEvent(message.eventType, { origin });
     return false;
+  }
+
+  if (message.type === "ANTITABS_HANDLE_LINK") {
+    handleNewTabLink(message.url, sender)
+      .then((handled) => sendResponse({ handled }))
+      .catch(() => sendResponse({ handled: false }));
+    return true;
+  }
+
+  if (message.type === "ANTITABS_RESOLVE_PROMPT") {
+    if (!sender.tab || sender.tab.id == null || sender.frameId !== 0) {
+      return false;
+    }
+
+    resolveDecision(message.promptId, message.choice, sender.tab.id)
+      .then((resolved) => sendResponse({ resolved }))
+      .catch(() => sendResponse({ resolved: false }));
+    return true;
   }
 
   if (message.type === "ANTITABS_GET_STATS") {

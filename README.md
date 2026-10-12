@@ -7,7 +7,8 @@ It is built for sites that use popups, hidden frames, transparent click layers, 
 ## Features
 
 - Blocks script-opened popup tabs from protected websites.
-- Keeps new-tab links in the current tab when protection is active.
+- Asks where to open new-tab links by default: here, in a new tab, or nowhere. You can restore the previous automatic **Open in this tab** behavior in Settings.
+- Closes detected popup tabs by default. An optional global setting keeps a detected tab in the background and asks whether to allow or close it.
 - Neutralizes suspicious invisible iframes and transparent full-page click layers.
 - Shows session statistics for blocked popups, closed tabs, cleared overlays, and links kept in place.
 - Pulses the toolbar badge when protection catches something.
@@ -18,6 +19,14 @@ It is built for sites that use popups, hidden frames, transparent click layers, 
 Some sites gate a feature behind a new-tab navigation. When protection is on, use **Allow once** to let the next new tab open from the current website.
 
 After that single tab is allowed, AntiTabs automatically returns to normal blocking. The toolbar badge shows `1` while the allowance is armed.
+
+## Link And Popup Decisions
+
+The two behavior settings in the toolbar popup apply to every website where protection is enabled. **New-tab links** defaults to **Ask first**. **Ask about popup tabs** is off by default, so the popup tab closer continues to close detected tabs automatically.
+
+When popup confirmation is enabled, AntiTabs keeps the created tab in the background while showing a decision on the original page. Allowing it activates that same tab; declining closes it. An unanswered decision expires after 20 seconds. A new-tab link decision expires without opening the link, while an unanswered popup decision closes the tab.
+
+The popup confirmation setting applies to tabs that the browser has already created. Script popups blocked before tab creation are still blocked immediately. **Allow once** bypasses popup confirmation for one tab.
 
 ## Load Locally In Microsoft Edge
 

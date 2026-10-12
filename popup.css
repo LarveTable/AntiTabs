@@ -164,6 +164,69 @@ h1 {
   color: #111827;
 }
 
+.settings {
+  background: #ffffff;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  padding: 12px;
+}
+
+.settings h2 {
+  font-size: 14px;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.setting-field,
+.setting-check {
+  display: grid;
+  gap: 4px;
+}
+
+.setting-check {
+  align-items: center;
+  grid-template-columns: 1fr auto;
+}
+
+.setting-field strong,
+.setting-check strong,
+.setting-field small,
+.setting-check small {
+  display: block;
+}
+
+.setting-field strong,
+.setting-check strong {
+  font-size: 12px;
+}
+
+.setting-field small,
+.setting-check small {
+  color: #626873;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.setting-field select {
+  background: #ffffff;
+  border: 1px solid #c8ced8;
+  border-radius: 6px;
+  color: #151515;
+  font: inherit;
+  font-size: 12px;
+  margin-top: 6px;
+  padding: 8px;
+  width: 100%;
+}
+
+.setting-check input {
+  accent-color: #246bfe;
+  height: 18px;
+  width: 18px;
+}
+
 .stats {
   display: grid;
   gap: 12px;
