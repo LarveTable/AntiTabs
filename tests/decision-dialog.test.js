@@ -165,3 +165,17 @@ test("popup dialog queues and can be dismissed when the tab closes", () => {
     type: "ANTITABS_RESOLVE_PROMPT", promptId: "two", choice: "close"
   });
 });
+
+test("long popup URLs show only their beginning while the buttons remain available", () => {
+  const content = createContent();
+  const fullUrl = `https://ads.example/${"a".repeat(10000)}`;
+  content.runtimeMessage({
+    type: "ANTITABS_SHOW_DECISION", promptId: "long", kind: "popup",
+    origin: "https://example.com", url: fullUrl
+  });
+
+  const displayedUrl = elements(content.html.children[0].shadow, "p")
+    .find((element) => element.className === "url").textContent;
+  assert.equal(displayedUrl, `${fullUrl.slice(0, 120)}…`);
+  assert.deepEqual(content.buttons().map((button) => button.textContent), ["Close tab", "Allow tab"]);
+});

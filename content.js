@@ -6,6 +6,7 @@ const PROMPT_ATTRIBUTE = "data-antitabs-prompt";
 const MIN_OVERLAY_COVERAGE = 0.7;
 const INVISIBLE_OPACITY = 0.05;
 const EXTREME_Z_INDEX = 2147480000;
+const MAX_DECISION_URL_LENGTH = 120;
 const OVERLAY_SCAN_DELAY_MS = 100;
 const VIEWPORT_SCAN_DELAY_MS = 250;
 
@@ -181,6 +182,16 @@ function makeDecisionButton(label, choice, className) {
   return button;
 }
 
+function formatDecisionUrl(url) {
+  if (!url) {
+    return "Destination not available yet";
+  }
+
+  return url.length > MAX_DECISION_URL_LENGTH
+    ? `${url.slice(0, MAX_DECISION_URL_LENGTH)}…`
+    : url;
+}
+
 function showNextDecision() {
   if (activeDecision || !isTopFrame() || !decisionQueue.length) {
     return;
@@ -200,11 +211,12 @@ function showNextDecision() {
     .backdrop { align-items: center; background: rgba(15, 23, 42, .55); box-sizing: border-box;
       display: flex; inset: 0; justify-content: center; padding: 18px; position: fixed; }
     .dialog { background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0, 0, 0, .28);
-      box-sizing: border-box; color: #151515; max-width: 440px; padding: 20px; width: 100%; }
+      box-sizing: border-box; color: #151515; max-height: calc(100vh - 36px); max-width: 440px;
+      overflow-y: auto; padding: 20px; width: 100%; }
     h2 { font-size: 18px; line-height: 1.25; margin: 0 0 8px; }
     p { color: #4b5563; font-size: 13px; line-height: 1.45; margin: 0 0 12px; }
-    .url { background: #f3f4f6; border-radius: 6px; color: #374151; overflow-wrap: anywhere;
-      padding: 8px; }
+    .url { background: #f3f4f6; border-radius: 6px; color: #374151; max-height: 4.5em;
+      overflow: hidden; overflow-wrap: anywhere; padding: 8px; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
     button { background: #fff; border: 1px solid #cbd5e1; border-radius: 7px; color: #111827;
       cursor: pointer; font: 600 13px system-ui, sans-serif; padding: 9px 11px; }
@@ -227,7 +239,7 @@ function showNextDecision() {
     : "Choose where to open the link, or stay on this page. This choice expires in 20 seconds.";
   const url = document.createElement("p");
   url.className = "url";
-  url.textContent = decision.url || "Destination not available yet";
+  url.textContent = formatDecisionUrl(decision.url);
   const actions = document.createElement("div");
   actions.className = "actions";
 
